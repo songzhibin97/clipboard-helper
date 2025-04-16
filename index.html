@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>剪贴板历史</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; }
+        h1 { color: #333; font-size: 24px; margin-bottom: 10px; display: inline-block; }
+        .header { display: flex; align-items: center; width: 400px; justify-content: space-between; }
+        #settingsButton { background: none; border: none; cursor: pointer; font-size: 18px; color: #666; }
+        #settingsButton:hover { color: #333; }
+        .controls { display: flex; align-items: center; width: 400px; margin-bottom: 10px; }
+        #searchBar { flex: 1; padding: 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 20px; outline: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #pinButton { background: none; border: none; cursor: pointer; font-size: 18px; margin-left: 10px; color: #666; }
+        #pinButton.pinned { color: #007AFF; }
+        #pinButton:hover { color: #333; }
+        #clearButton { padding: 8px 16px; font-size: 14px; color: white; background: #ff4d4d; border: none; border-radius: 20px; cursor: pointer; margin-bottom: 20px; transition: background 0.2s; }
+        #clearButton:hover { background: #e60000; }
+        #history, #settings { width: 400px; max-height: 500px; overflow-y: auto; background: white; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); padding: 10px; }
+        #settings { display: none; }
+        .clip-item { display: flex; align-items: center; padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+        .clip-item:hover { background: #e6f0ff; }
+        .clip-item.copied { animation: flash 0.3s ease-in-out; }
+        @keyframes flash { 0% { background: #f9f9f9; } 50% { background: #a3d4ff; } 100% { background: #f9f9f9; } }
+        .tooltip { position: fixed; background: rgba(0,0,0,0.7); color: white; padding: 6px 12px; border-radius: 4px; font-size: 12px; z-index: 1000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+        .tooltip.show { opacity: 1; }
+        .clip-icon { width: 24px; height: 24px; margin-right: 10px; object-fit: contain; }
+        .clip-content { flex: 1; font-size: 14px; color: #333; word-wrap: break-word; }
+        .clip-meta { font-size: 12px; color: #888; margin-top: 5px; }
+        .no-results { text-align: center; color: #888; font-size: 14px; padding: 20px; }
+        #settings h2 { font-size: 20px; color: #333; margin-bottom: 15px; }
+        #settings label { display: block; margin: 10px 0; font-size: 14px; }
+        #settings input[type="checkbox"] { margin-right: 8px; }
+        #settings input[type="text"] { padding: 8px; width: 200px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        #settings button { padding: 8px 16px; margin: 10px 5px 0 0; font-size: 14px; border: none; border-radius: 20px; cursor: pointer; }
+        #settings #saveSettings { background: #4CAF50; color: white; }
+        #settings #saveSettings:hover { background: #45a049; }
+        #settings #backButton { background: #666; color: white; }
+        #settings #backButton:hover { background: #555; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>剪贴板历史</h1>
+        <button id="settingsButton" onclick="showSettings()">⚙️</button>
+    </div>
+    <div class="controls">
+        <input id="searchBar" onkeyup="searchHistory()" placeholder="搜索剪贴板历史..." type="text">
+        <button id="pinButton" onclick="togglePin()">📍</button>
+    </div>
+    <button id="clearButton" onclick="clearHistory()">清空历史</button>
+    <div id="history"></div>
+    <div id="settings">
+        <h2>设置</h2>
+        <label><input id="autoHide" type="checkbox"> 失去焦点时自动隐藏</label>
+        <label>快捷键: <input id="hotkey" placeholder="如 CommandOrControl+Shift+V" type="text"></label>
+        <button id="saveSettings" onclick="saveSettings()">保存</button>
+        <button id="backButton" onclick="showHistory()">返回</button>
+    </div>
+    <div class="tooltip" id="tooltip"></div>
+    <script>
+        let clipboardHistory = [];
+        const tooltip = document.getElementById('tooltip');
+        const pinButton = document.getElementById('pinButton');
+        const defaultIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHJ4PSI4IiByeT0iOCIgZmlsbD0iIzk5OSIvPjx0ZXh0IHg9IjE2IiB5PSIyMCIgZm9udC1mYW1pbHk9IkhlbHZldGljYSBOZXVlLCBBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjYwMCIgZmlsbD0iI2ZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgYWxpZ25tZW50LWJhc2VsaW5lPSJtaWRkbGUiPj88L3RleHQ+PC9zdmc+';
+
+        function showTooltip(text, x, y) {
+            tooltip.textContent = text;
+            tooltip.style.left = `${x}px`;
+            tooltip.style.top = `${y}px`;
+            tooltip.classList.add('show');
+            setTimeout(() => tooltip.classList.remove('show'), 1500);
+        }
+
+        async function saveClipboardItem(item) {
+            try {
+                await window.electronAPI.saveClipboardItem(item);
+            } catch (err) {
+                console.error('保存剪贴板项失败:', err);
+            }
+        }
+
+        async function clearHistory() {
+            try {
+                await window.electronAPI.clearClipboardHistory();
+                clipboardHistory = [];
+                displayHistory();
+            } catch (err) {
+                console.error('清空历史失败:', err);
+            }
+        }
+
+        function searchHistory() {
+            const filter = document.getElementById('searchBar').value;
+            displayHistory(filter);
+        }
+
+        function displayHistory(filter = '') {
+            const historyDiv = document.getElementById('history');
+            historyDiv.innerHTML = '';
+            const filteredHistory = filter ? clipboardHistory.filter(item => item.content.toLowerCase().includes(filter.toLowerCase())) : clipboardHistory;
+            if (filteredHistory.length === 0) {
+                historyDiv.innerHTML = '<div class="no-results">没有匹配的历史记录</div>';
+                return;
+            }
+            filteredHistory.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'clip-item';
+                div.innerHTML = `
+                    <img src="${item.iconDataUrl || defaultIcon}" class="clip-icon" onerror="this.src='${defaultIcon}'">
+                    <div class="clip-content">${item.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').substring(0, 100)}</div>
+                    <div class="clip-meta">${item.source} - ${new Date(item.timestamp).toLocaleString()}</div>`;
+                div.onclick = async () => {
+                    try {
+                        await window.electronAPI.writeClipboard(item.content);
+                        div.classList.add('copied');
+                        setTimeout(() => div.classList.remove('copied'), 300);
+                        showTooltip('已复制', div.getBoundingClientRect().left + 50, div.getBoundingClientRect().top);
+                    } catch (err) {
+                        console.error('复制失败:', err);
+                        showTooltip('复制失败', div.getBoundingClientRect().left + 50, div.getBoundingClientRect().top);
+                    }
+                };
+                historyDiv.appendChild(div);
+            });
+        }
+
+        async function loadHistory() {
+            try {
+                clipboardHistory = await window.electronAPI.getClipboardHistory();
+                displayHistory();
+            } catch (err) {
+                console.error('加载历史失败:', err);
+            }
+        }
+
+        async function showSettings() {
+            document.getElementById('history').style.display = 'none';
+            document.getElementById('settings').style.display = 'block';
+            await loadSettings();
+        }
+
+        function showHistory() {
+            document.getElementById('settings').style.display = 'none';
+            document.getElementById('history').style.display = 'block';
+            loadHistory();
+        }
+
+        async function loadSettings() {
+            try {
+                const settings = await window.electronAPI.getSettings();
+                document.getElementById('autoHide').checked = settings.autoHide;
+                document.getElementById('hotkey').value = settings.hotkey;
+            } catch (err) {
+                console.error('加载设置失败:', err);
+            }
+        }
+
+        async function saveSettings() {
+            try {
+                const autoHide = document.getElementById('autoHide').checked;
+                const hotkey = document.getElementById('hotkey').value;
+                const result = await window.electronAPI.updateSettings({ autoHide, hotkey });
+                if (result.success) {
+                    showTooltip('设置已保存', 50, 50);
+                } else {
+                    showTooltip('保存失败: ' + result.error, 50, 50);
+                }
+            } catch (err) {
+                console.error('保存设置失败:', err);
+                showTooltip('保存失败', 50, 50);
+            }
+        }
+
+        async function togglePin() {
+            try {
+                const isPinned = await window.electronAPI.toggleAlwaysOnTop();
+                pinButton.classList.toggle('pinned', isPinned);
+                pinButton.title = isPinned ? '取消置顶' : '置顶窗口';
+                showTooltip(isPinned ? '窗口已置顶' : '已取消置顶', pinButton.getBoundingClientRect().left, pinButton.getBoundingClientRect().top + 30);
+            } catch (err) {
+                console.error('切换置顶失败:', err);
+                showTooltip('操作失败', pinButton.getBoundingClientRect().left, pinButton.getBoundingClientRect().top + 30);
+            }
+        }
+
+        async function initPinButton() {
+            try {
+                const isPinned = await window.electronAPI.getAlwaysOnTop();
+                pinButton.classList.toggle('pinned', isPinned);
+                pinButton.title = isPinned ? '取消置顶' : '置顶窗口';
+            } catch (err) {
+                console.error('初始化置顶状态失败:', err);
+            }
+        }
+
+        window.electronAPI.onHistoryUpdated((history) => {
+            clipboardHistory = history;
+            displayHistory();
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadHistory();
+            initPinButton();
+        });
+    </script>
+</body>
+</html>

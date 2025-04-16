@@ -1,0 +1,32 @@
+{
+    "name": "electron-clipboard",
+    "version": "1.0.3",
+    "description": "Clipboard history manager for macOS",
+    "main": "main.js",
+    "scripts": {
+        "start": "electron .",
+        "pack": "electron-builder --dir",
+        "dist": "electron-builder",
+        "postinstall": "electron-builder install-app-deps"
+    },
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "electron": "^31.3.1",
+        "electron-builder": "^24.13.3"
+    },
+    "dependencies": {
+        "applescript": "^1.0.0",
+        "electron-store": "^8.2.0"
+    },
+    "build": {
+        "appId": "com.example.clipboard",
+        "mac": {
+            "category": "public.app-category.utilities"
+        },
+        "files": [
+            "**/*",
+            "!assets/icon.icns"
+        ]
+    }
+}
