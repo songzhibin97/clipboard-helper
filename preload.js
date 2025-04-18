@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getClipboardHistory: () => ipcRenderer.invoke('get-clipboard-history'),
     saveClipboardItem: (item) => ipcRenderer.invoke('save-clipboard-item', item),
     clearClipboardHistory: () => ipcRenderer.invoke('clear-clipboard-history'),
-    writeClipboard: (text) => ipcRenderer.invoke('write-clipboard', text),
+    writeClipboard: ({ content, type }) => ipcRenderer.invoke('write-clipboard', { content, type }),
     onHistoryUpdated: (callback) => ipcRenderer.on('history-updated', (event, history) => callback(history)),
     getSettings: () => ipcRenderer.invoke('get-settings'),
     updateSettings: (settings) => ipcRenderer.invoke('update-settings', settings),

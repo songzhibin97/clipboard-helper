@@ -251,13 +251,23 @@ async function getActiveAppName() {
 
 async function handleClipboardUpdate() {
     try {
-        const text = clipboard.readText();
-        if (!text || text.trim() === '') {
-            console.log('剪贴板内容为空，跳过处理');
-            return;
+        const image = clipboard.readImage();
+        let content, type;
+        if (!image.isEmpty()) {
+            content = image.resize({ width: 64, height: 64 }).toDataURL();
+            type = 'image';
+            console.log('检测到图片剪贴板内容，数据长度:', content.length);
+        } else {
+            const text = clipboard.readText();
+            if (!text || text.trim() === '') {
+                console.log('剪贴板内容为空，跳过处理');
+                return;
+            }
+            content = text;
+            type = 'text';
         }
         let clipboardHistory = store.get('clipboardHistory', []);
-        if (clipboardHistory[0]?.content === text) {
+        if (clipboardHistory[0]?.content === content && clipboardHistory[0]?.type === type) {
             console.log('重复的剪贴板内容，跳过处理');
             return;
         }
@@ -267,20 +277,20 @@ async function handleClipboardUpdate() {
         // 检查是否从本应用复制
         const isOwnApp = currentApp.toLowerCase().includes('electron') || currentApp === 'electron-clipboard';
         if (isOwnApp) {
-            const matchingItem = clipboardHistory.find(item => item.content === text);
+            const matchingItem = clipboardHistory.find(item => item.content === content && item.type === type);
             if (matchingItem) {
                 source = matchingItem.source;
                 iconDataUrl = matchingItem.iconDataUrl;
-                console.log(`从本应用复制，保留原始 source: ${source}`);
+                console.log(`从本应用复制，保留原始 source: ${source}, type: ${type}`);
             }
         }
-        const item = { content: text, source, timestamp: Date.now() };
+        const item = { content, source, timestamp: Date.now(), type };
         if (!iconDataUrl) {
             iconDataUrl = await getAppIcon(source);
         }
         item.iconDataUrl = iconDataUrl;
-        console.log('添加剪贴板项:', { content: text.substring(0, 50), source, timestamp: item.timestamp });
-        clipboardHistory = clipboardHistory.filter(i => i.content !== text);
+        console.log('添加剪贴板项:', { content: content.substring(0, 50), source, type, timestamp: item.timestamp });
+        clipboardHistory = clipboardHistory.filter(i => i.content !== content || i.type !== type);
         clipboardHistory.unshift(item);
         if (clipboardHistory.length > MAX_HISTORY) clipboardHistory.pop();
         store.set('clipboardHistory', clipboardHistory);
@@ -294,12 +304,15 @@ async function handleClipboardUpdate() {
 
 function startClipboardWatcher() {
     let lastText = clipboard.readText() || '';
+    let lastImage = clipboard.readImage().toDataURL();
     const checkClipboard = async () => {
         try {
             const currentText = clipboard.readText() || '';
-            if (currentText && currentText !== lastText) {
-                console.log('检测到剪贴板变化:', { text: currentText.substring(0, 50) });
+            const currentImage = clipboard.readImage().toDataURL();
+            if ((currentText && currentText !== lastText) || currentImage !== lastImage) {
+                console.log('检测到剪贴板变化:', { text: currentText.substring(0, 50), hasImage: !clipboard.readImage().isEmpty() });
                 lastText = currentText;
+                lastImage = currentImage;
                 await handleClipboardUpdate();
             }
             setTimeout(checkClipboard, 500);
@@ -325,7 +338,7 @@ function setupIPC() {
     });
     ipcMain.handle('save-clipboard-item', async (event, item) => {
         let clipboardHistory = store.get('clipboardHistory', []);
-        clipboardHistory = clipboardHistory.filter(i => i.content !== item.content);
+        clipboardHistory = clipboardHistory.filter(i => i.content !== item.content || i.type !== item.type);
         if (!item.iconDataUrl) item.iconDataUrl = await getAppIcon(item.source);
         clipboardHistory.unshift(item);
         if (clipboardHistory.length > MAX_HISTORY) clipboardHistory.pop();
@@ -342,10 +355,16 @@ function setupIPC() {
         }
         return [];
     });
-    ipcMain.handle('write-clipboard', (event, text) => {
+    ipcMain.handle('write-clipboard', (event, { content, type }) => {
         try {
-            clipboard.writeText(text);
-            console.log('写入剪贴板:', text.substring(0, 50));
+            if (type === 'image') {
+                const image = nativeImage.createFromDataURL(content);
+                clipboard.writeImage(image);
+                console.log('写入剪贴板图片:', content.substring(0, 50));
+            } else {
+                clipboard.writeText(content);
+                console.log('写入剪贴板文本:', content.substring(0, 50));
+            }
         } catch (err) {
             console.error('写入剪贴板失败:', err.message);
         }

@@ -27,6 +27,7 @@
         .tooltip.show { opacity: 1; }
         .clip-icon { width: 24px; height: 24px; margin-right: 10px; object-fit: contain; }
         .clip-content { flex: 1; font-size: 14px; color: #333; word-wrap: break-word; }
+        .clip-content img { max-width: 64px; max-height: 64px; object-fit: contain; border-radius: 4px; }
         .clip-meta { font-size: 12px; color: #888; margin-top: 5px; }
         .no-results { text-align: center; color: #888; font-size: 14px; padding: 20px; }
         #settings h2 { font-size: 20px; color: #333; margin-bottom: 15px; }
@@ -92,28 +93,31 @@
         }
 
         function searchHistory() {
-            const filter = document.getElementById('searchBar').value;
-            displayHistory(filter);
+            const filter = document.getElementById('searchBar').value.toLowerCase();
+            const filteredHistory = filter ? clipboardHistory.filter(item => item.type === 'text' && item.content.toLowerCase().includes(filter)) : clipboardHistory;
+            displayHistory(filteredHistory);
         }
 
-        function displayHistory(filter = '') {
+        function displayHistory(history = clipboardHistory) {
             const historyDiv = document.getElementById('history');
             historyDiv.innerHTML = '';
-            const filteredHistory = filter ? clipboardHistory.filter(item => item.content.toLowerCase().includes(filter.toLowerCase())) : clipboardHistory;
-            if (filteredHistory.length === 0) {
+            if (history.length === 0) {
                 historyDiv.innerHTML = '<div class="no-results">没有匹配的历史记录</div>';
                 return;
             }
-            filteredHistory.forEach(item => {
+            history.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'clip-item';
+                const contentHtml = item.type === 'image' ?
+                    `<img src="${item.content}" class="clip-content" alt="Clipboard Image">` :
+                    `<div class="clip-content">${item.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').substring(0, 100)}</div>`;
                 div.innerHTML = `
                     <img src="${item.iconDataUrl || defaultIcon}" class="clip-icon" onerror="this.src='${defaultIcon}'">
-                    <div class="clip-content">${item.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').substring(0, 100)}</div>
+                    ${contentHtml}
                     <div class="clip-meta">${item.source} - ${new Date(item.timestamp).toLocaleString()}</div>`;
                 div.onclick = async () => {
                     try {
-                        await window.electronAPI.writeClipboard(item.content);
+                        await window.electronAPI.writeClipboard({ content: item.content, type: item.type });
                         div.classList.add('copied');
                         setTimeout(() => div.classList.remove('copied'), 300);
                         showTooltip('已复制', div.getBoundingClientRect().left + 50, div.getBoundingClientRect().top);
