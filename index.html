@@ -22,6 +22,7 @@
         .clip-item { display: flex; align-items: center; padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
         .clip-item:hover { background: #e6f0ff; }
         .clip-item.copied { animation: flash 0.3s ease-in-out; }
+        .clip-item.selected { background: #d0e4ff; }
         @keyframes flash { 0% { background: #f9f9f9; } 50% { background: #a3d4ff; } 100% { background: #f9f9f9; } }
         .tooltip { position: fixed; background: rgba(0,0,0,0.7); color: white; padding: 6px 12px; border-radius: 4px; font-size: 12px; z-index: 1000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
         .tooltip.show { opacity: 1; }
@@ -62,8 +63,10 @@
     <div class="tooltip" id="tooltip"></div>
     <script>
         let clipboardHistory = [];
+        let selectedIndex = -1;
         const tooltip = document.getElementById('tooltip');
         const pinButton = document.getElementById('pinButton');
+        const searchBar = document.getElementById('searchBar');
         const defaultIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHJ4PSI4IiByeT0iOCIgZmlsbD0iIzk5OSIvPjx0ZXh0IHg9IjE2IiB5PSIyMCIgZm9udC1mYW1pbHk9IkhlbHZldGljYSBOZXVlLCBBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjYwMCIgZmlsbD0iI2ZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgYWxpZ25tZW50LWJhc2VsaW5lPSJtaWRkbGUiPj88L3RleHQ+PC9zdmc+';
 
         function showTooltip(text, x, y) {
@@ -86,6 +89,7 @@
             try {
                 await window.electronAPI.clearClipboardHistory();
                 clipboardHistory = [];
+                selectedIndex = -1;
                 displayHistory();
             } catch (err) {
                 console.error('清空历史失败:', err);
@@ -93,9 +97,17 @@
         }
 
         function searchHistory() {
-            const filter = document.getElementById('searchBar').value.toLowerCase();
+            const filter = searchBar.value.toLowerCase();
             const filteredHistory = filter ? clipboardHistory.filter(item => item.type === 'text' && item.content.toLowerCase().includes(filter)) : clipboardHistory;
+            selectedIndex = -1;
             displayHistory(filteredHistory);
+        }
+
+        function updateSelection() {
+            const items = document.querySelectorAll('.clip-item');
+            items.forEach((item, index) => {
+                item.classList.toggle('selected', index === selectedIndex);
+            });
         }
 
         function displayHistory(history = clipboardHistory) {
@@ -103,11 +115,13 @@
             historyDiv.innerHTML = '';
             if (history.length === 0) {
                 historyDiv.innerHTML = '<div class="no-results">没有匹配的历史记录</div>';
+                selectedIndex = -1;
                 return;
             }
-            history.forEach(item => {
+            history.forEach((item, index) => {
                 const div = document.createElement('div');
-                div.className = 'clip-item';
+                div.className = `clip-item ${index === selectedIndex ? 'selected' : ''}`;
+                div.dataset.index = index;
                 const contentHtml = item.type === 'image' ?
                     `<img src="${item.content}" class="clip-content" alt="Clipboard Image">` :
                     `<div class="clip-content">${item.content.replace(/</g, '&lt;').replace(/>/g, '&gt;').substring(0, 100)}</div>`;
@@ -115,24 +129,52 @@
                     <img src="${item.iconDataUrl || defaultIcon}" class="clip-icon" onerror="this.src='${defaultIcon}'">
                     ${contentHtml}
                     <div class="clip-meta">${item.source} - ${new Date(item.timestamp).toLocaleString()}</div>`;
-                div.onclick = async () => {
+                div.onclick = async (e) => {
+                    selectedIndex = parseInt(div.dataset.index);
+                    updateSelection();
                     try {
-                        await window.electronAPI.writeClipboard({ content: item.content, type: item.type });
+                        await window.electronAPI.writeClipboard({
+                            content: item.content,
+                            type: item.type,
+                            fullImage: item.fullImage
+                        });
                         div.classList.add('copied');
                         setTimeout(() => div.classList.remove('copied'), 300);
-                        showTooltip('已复制', div.getBoundingClientRect().left + 50, div.getBoundingClientRect().top);
+                        showTooltip('已复制', e.clientX, e.clientY);
                     } catch (err) {
                         console.error('复制失败:', err);
-                        showTooltip('复制失败', div.getBoundingClientRect().left + 50, div.getBoundingClientRect().top);
+                        showTooltip('复制失败', e.clientX, e.clientY);
                     }
                 };
                 historyDiv.appendChild(div);
             });
         }
 
+        async function openPreview() {
+            if (selectedIndex < 0 || selectedIndex >= clipboardHistory.length) {
+                showTooltip('请先选择一个记录', 50, 50);
+                return;
+            }
+            const item = clipboardHistory[selectedIndex];
+            if (item.type === 'image' && !item.fullImage) {
+                showTooltip('旧记录仅支持缩略图预览', 50, 50);
+                return;
+            }
+            try {
+                await window.electronAPI.openPreview({
+                    content: item.type === 'image' ? item.fullImage : item.content,
+                    type: item.type
+                });
+            } catch (err) {
+                console.error('打开预览失败:', err);
+                showTooltip('预览失败', 50, 50);
+            }
+        }
+
         async function loadHistory() {
             try {
                 clipboardHistory = await window.electronAPI.getClipboardHistory();
+                selectedIndex = -1;
                 displayHistory();
             } catch (err) {
                 console.error('加载历史失败:', err);
@@ -199,8 +241,35 @@
             }
         }
 
+        document.addEventListener('keydown', (e) => {
+            if (document.getElementById('settings').style.display === 'block' || searchBar === document.activeElement) {
+                return;
+            }
+            if (e.code === 'Space') {
+                e.preventDefault();
+                openPreview();
+            } else if (e.code === 'ArrowDown') {
+                e.preventDefault();
+                if (selectedIndex < clipboardHistory.length - 1) {
+                    selectedIndex++;
+                    updateSelection();
+                    const selectedItem = document.querySelector(`.clip-item[data-index="${selectedIndex}"]`);
+                    if (selectedItem) selectedItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            } else if (e.code === 'ArrowUp') {
+                e.preventDefault();
+                if (selectedIndex > 0) {
+                    selectedIndex--;
+                    updateSelection();
+                    const selectedItem = document.querySelector(`.clip-item[data-index="${selectedIndex}"]`);
+                    if (selectedItem) selectedItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }
+        });
+
         window.electronAPI.onHistoryUpdated((history) => {
             clipboardHistory = history;
+            selectedIndex = -1;
             displayHistory();
         });
 

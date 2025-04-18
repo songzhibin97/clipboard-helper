@@ -8,7 +8,7 @@ const store = new Store();
 const settingsStore = new Store({ name: 'settings', defaults: { autoHide: true, hotkey: 'CommandOrControl+Shift+V' } });
 const MAX_HISTORY = 100;
 const appIconCache = {};
-let mainWindow, tray, isWindowVisible = true;
+let mainWindow, tray, isWindowVisible = true, previewWindow = null;
 app.isQuitting = false;
 
 function createWindow() {
@@ -38,6 +38,95 @@ function createWindow() {
     isWindowVisible = mainWindow.isVisible();
 }
 
+function createPreviewWindow({ content, type }) {
+    if (previewWindow) {
+        previewWindow.close();
+        previewWindow = null;
+    }
+    const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+    let windowWidth, windowHeight;
+
+    if (type === 'image') {
+        try {
+            const img = nativeImage.createFromDataURL(content);
+            const { width: imgWidth, height: imgHeight } = img.getSize();
+            // 自适应窗口，限制最大 80% 屏幕尺寸
+            windowWidth = Math.min(imgWidth, screenWidth * 0.8);
+            windowHeight = Math.min(imgHeight, screenHeight * 0.8);
+            console.log(`图片尺寸: ${imgWidth}x${imgHeight}, 窗口尺寸: ${windowWidth}x${windowHeight}`);
+        } catch (err) {
+            console.error('解析图片尺寸失败:', err.message);
+            windowWidth = 300;
+            windowHeight = 300;
+        }
+    } else {
+        windowWidth = 600; // 文本窗口放大
+        windowHeight = 400;
+    }
+
+    previewWindow = new BrowserWindow({
+        width: windowWidth,
+        height: windowHeight,
+        x: screenWidth / 2 - windowWidth / 2,
+        y: screenHeight / 2 - windowHeight / 2,
+        frame: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        backgroundColor: '#ffffff',
+        webPreferences: { nodeIntegration: false, contextIsolation: true }
+    });
+
+    const htmlContent = type === 'image' ?
+        `<!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body { margin: 0; display: flex; justify-content: center; align-items: center; background: #fff; }
+                img { width: 100%; height: 100%; object-fit: contain; }
+            </style>
+        </head>
+        <body>
+            <img src="${content}" alt="Preview" onerror="console.error('图片加载失败')">
+            <script>
+                document.addEventListener('keydown', (e) => {
+                    if (e.keyCode === 27) { // Esc 键
+                        window.close();
+                    }
+                });
+            </script>
+        </body>
+        </html>` :
+        `<!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body { margin: 20px; font-family: -apple-system, sans-serif; font-size: 14px; color: #333; white-space: pre-wrap; word-wrap: break-word; background: #fff; }
+            </style>
+        </head>
+        <body>
+            ${content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+            <script>
+                document.addEventListener('keydown', (e) => {
+                    if (e.keyCode === 27) { // Esc 键
+                        window.close();
+                    }
+                });
+            </script>
+        </body>
+        </html>`;
+
+    previewWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(htmlContent)}`).catch(err => {
+        console.error('加载预览窗口失败:', err.message);
+    });
+
+    previewWindow.on('closed', () => previewWindow = null);
+    previewWindow.on('blur', () => {
+        if (previewWindow) previewWindow.close();
+    });
+    console.log(`打开预览窗口: type=${type}, content=${content.substring(0, 50)}`);
+}
+
 function toggleWindow() {
     if (!mainWindow) {
         createWindow();
@@ -64,7 +153,7 @@ function toggleAlwaysOnTop() {
 
 function createTray() {
     try {
-        const iconPath = path.join(__dirname, 'assets', 'tray-icon16.png');
+        const iconPath = path.join(__dirname, 'assets', 'tray-icon.png');
         if (!fs.existsSync(iconPath)) {
             console.log('托盘图标文件缺失，使用文本图标');
             throw new Error('托盘图标文件缺失');
@@ -252,11 +341,21 @@ async function getActiveAppName() {
 async function handleClipboardUpdate() {
     try {
         const image = clipboard.readImage();
-        let content, type;
+        let content, fullImage, type;
         if (!image.isEmpty()) {
-            content = image.resize({ width: 64, height: 64 }).toDataURL();
+            content = image.resize({ width: 64, height: 64 }).toDataURL(); // 缩略图
+            fullImage = image.toDataURL(); // 原始图片
             type = 'image';
-            console.log('检测到图片剪贴板内容，数据长度:', content.length);
+            try {
+                const imgSize = nativeImage.createFromDataURL(fullImage).getSize();
+                console.log('检测到图片剪贴板内容', {
+                    thumbnailLength: content.length,
+                    fullImageLength: fullImage.length,
+                    imageSize: `${imgSize.width}x${imgSize.height}`
+                });
+            } catch (err) {
+                console.error('验证图片尺寸失败:', err.message);
+            }
         } else {
             const text = clipboard.readText();
             if (!text || text.trim() === '') {
@@ -274,7 +373,6 @@ async function handleClipboardUpdate() {
         const currentApp = await getActiveAppName();
         let source = currentApp;
         let iconDataUrl;
-        // 检查是否从本应用复制
         const isOwnApp = currentApp.toLowerCase().includes('electron') || currentApp === 'electron-clipboard';
         if (isOwnApp) {
             const matchingItem = clipboardHistory.find(item => item.content === content && item.type === type);
@@ -284,7 +382,7 @@ async function handleClipboardUpdate() {
                 console.log(`从本应用复制，保留原始 source: ${source}, type: ${type}`);
             }
         }
-        const item = { content, source, timestamp: Date.now(), type };
+        const item = { content, fullImage: type === 'image' ? fullImage : undefined, source, timestamp: Date.now(), type };
         if (!iconDataUrl) {
             iconDataUrl = await getAppIcon(source);
         }
@@ -355,18 +453,26 @@ function setupIPC() {
         }
         return [];
     });
-    ipcMain.handle('write-clipboard', (event, { content, type }) => {
+    ipcMain.handle('write-clipboard', (event, { content, type, fullImage }) => {
         try {
             if (type === 'image') {
-                const image = nativeImage.createFromDataURL(content);
+                const image = nativeImage.createFromDataURL(fullImage || content);
                 clipboard.writeImage(image);
-                console.log('写入剪贴板图片:', content.substring(0, 50));
+                console.log('写入剪贴板图片:', (fullImage || content).substring(0, 50));
             } else {
                 clipboard.writeText(content);
                 console.log('写入剪贴板文本:', content.substring(0, 50));
             }
         } catch (err) {
             console.error('写入剪贴板失败:', err.message);
+        }
+    });
+    ipcMain.handle('open-preview', (event, { content, type }) => {
+        try {
+            createPreviewWindow({ content, type });
+            console.log('触发预览:', { type, content: content.substring(0, 50) });
+        } catch (err) {
+            console.error('打开预览失败:', err.message);
         }
     });
     ipcMain.handle('get-settings', () => ({
